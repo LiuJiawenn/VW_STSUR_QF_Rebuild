@@ -33,13 +33,13 @@ class STSURNet(nn.Module):
         hco = self.tpqSubNet(x[3].float())
 
         # 连接空间特征，全连接
-        hsc = torch.cat((hc - hs, hc, hs), dim=1)
+        hsc = torch.cat((hc, hs, hc - hs), dim=1)
         hsc = hsc.view(self.patches, 512 * 3)
         spq = F.dropout(F.relu(self.sc_fc1(hsc)), p=0.5)
         spq = self.sc_fc2(spq)
 
         # 连接时间特征，全连接
-        ht = torch.cat((hco - hso, hco, hso), dim=1)
+        ht = torch.cat((hco, hso, hco - hso), dim=1)
         ht = ht.view(self.patches, 512 * 3)
         tpq = F.dropout(F.relu(self.o_fc1(ht)), p=0.5)
         tpq = self.o_fc2(tpq)
@@ -47,11 +47,12 @@ class STSURNet(nn.Module):
         patch_q = torch.mul(spq, tpq)  # 每个patch的时空特征融合，点乘（这里我感觉点乘不了，论文写的点乘，但是我觉得他想说对应元素相乘）
 
         # 准备权重
-        wei = F.relu(self.sc_fc3(hsc))
+        wei = self.sc_fc3(hsc)
+        wei = wei-torch.min(wei)
         wei_flat = wei.view(self.key_frame_nb, self.patch_per_frame)
-        min_vals = wei_flat.min(dim=1, keepdim=True).values
-        max_vals = wei_flat.max(dim=1, keepdim=True).values
-        normalized_wei = F.normalize(wei_flat, p=1, dim=1)
+        norm = wei_flat.sum(dim=1, keepdim=True) + 1e-10
+        normalized_wei = wei_flat/norm
+
         # 加权求和
         frame_sur = torch.sum(torch.mul(patch_q.reshape(self.key_frame_nb, self.patch_per_frame), normalized_wei),
                               dim=1)  # 评分与权重对应元素相乘，再按行求和（每行是一帧的所有patch）

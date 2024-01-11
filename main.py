@@ -1,6 +1,8 @@
 import os
 import ffmpeg
 import numpy as np
+from scipy.stats import truncnorm
+import torch.nn.init as init
 from patchSampling import source_optical_flow_patch_extract, key_patch_select, key_patch_mask
 import torch
 import torch.nn as nn
@@ -128,9 +130,11 @@ def training(model, device, patch_rate, epoch_nb=30):
                 # loss = criterion(outputs, y_train_gpu)
                 # loss.backward()
                 # optimizer.step()
-                if count % 11 == 0:  # 完成了一个source video的SUR采样点训练
-                    batch_mse_history.append(np.mean(minibatch_mse))
-                    batch_mae_history.append(np.mean(minibatch_mae))
+                if len(minibatch_mse) == 11:  # 完成了一个source video的SUR采样点训练
+                    mean_mse = np.mean(minibatch_mse) if np.mean(minibatch_mse) < 10 else 10
+                    mean_mae = np.mean(minibatch_mae) if np.mean(minibatch_mae) < 10 else 10
+                    batch_mse_history.append(np.mean(mean_mse))
+                    batch_mae_history.append(np.mean(mean_mae))
                     minibatch_mse = []
                     minibatch_mae = []
                     print("*******************************************************    MSE:  ", loss.item(), "   当前视频： ", count)
@@ -150,8 +154,8 @@ def training(model, device, patch_rate, epoch_nb=30):
                 ax1.autoscale_view()
                 fig.canvas.draw()
                 fig.canvas.flush_events()
-            np.save('0111true_epoch'+str(epoch)+'.npy', truth_sur)
-            np.save('0111pred_epoch' + str(epoch) + '.npy', predicted_sur)
+            np.save('lossHistory/0111true_epoch'+str(epoch)+'.npy', truth_sur)
+            np.save('lossHistory/0111pred_epoch' + str(epoch) + '.npy', predicted_sur)
             torch.save(model.state_dict(), 'weights/model_weights' + str(epoch) + '.pth')
     except Exception as err:
         print(f"训练过程中发生了错误：{err}", "     当前已训练视频：", count)
@@ -160,25 +164,34 @@ def training(model, device, patch_rate, epoch_nb=30):
         plt.ioff()
         plt.show()
         np.save('lossHistory/batch_loss_final.npy', batch_mse_history)
-        torch.save(model.state_dict(), 'weight/model_weights_final.pth')
+        torch.save(model.state_dict(), 'weights/model_weights_final.pth')
         return batch_mse_history
 
 
-def truncated_normal_(tensor, mean=0, std=1.0):
-    # 使用numpy来生成截断正态分布
+def truncated_normal_(tensor, mean=0.0, std=1.0, trunc_std=2):
+    """
+    Fill the input Tensor with values drawn from a truncated normal distribution.
+    """
     size = tensor.shape
-    tmp = np.random.normal(loc=mean, scale=std, size=size)
-
-    # 确保值在正态分布的两个标准差之内
-    tmp = np.clip(tmp, mean - 2 * std, mean + 2 * std)
-
-    # 将numpy数组转换为torch张量
-    with torch.no_grad():
-        tensor.copy_(torch.from_numpy(tmp))
-    return tensor
+    tmp = tensor.new_empty(size + (4,)).normal_()
+    valid = (tmp < trunc_std) & (tmp > -trunc_std)
+    ind = valid.max(-1, keepdim=True)[1]
+    tensor.data.copy_(tmp.gather(-1, ind).squeeze(-1))
+    tensor.data.mul_(std).add_(mean)
 
 
-# Press the green button in the gutter to run the script.
+def initialize_weights(model):
+    """
+    Initialize the weights of the model with the truncated normal distribution.
+    """
+    for m in model.modules():
+        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+            truncated_normal_(m.weight,mean=0.0, std=0.01)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+
+
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(device)
@@ -189,9 +202,7 @@ if __name__ == '__main__':
     patch_rate = 0.4
     #  截断正态分布初始化
     model = STSURNet(key_frame_nb=key_frame_nb, patch_per_frame=patch_per_frame)
-    for name, param in model.named_parameters():
-        if 'weight' in name:
-            truncated_normal_(param, mean=0, std=0.1)
+    initialize_weights(model)
 
     model.to(device)
     # total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

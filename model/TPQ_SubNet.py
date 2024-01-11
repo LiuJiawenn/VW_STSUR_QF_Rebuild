@@ -1,10 +1,8 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
 # 与SPQ区别： conv1 输入是2通道的
-
 class TPQSubNet(nn.Module):
     def __init__(self):
         super(TPQSubNet, self).__init__()
