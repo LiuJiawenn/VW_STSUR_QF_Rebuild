@@ -164,6 +164,20 @@ def training(model, device, patch_rate, epoch_nb=30):
         return batch_mse_history
 
 
+def truncated_normal_(tensor, mean=0, std=1.0):
+    # 使用numpy来生成截断正态分布
+    size = tensor.shape
+    tmp = np.random.normal(loc=mean, scale=std, size=size)
+
+    # 确保值在正态分布的两个标准差之内
+    tmp = np.clip(tmp, mean - 2 * std, mean + 2 * std)
+
+    # 将numpy数组转换为torch张量
+    with torch.no_grad():
+        tensor.copy_(torch.from_numpy(tmp))
+    return tensor
+
+
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -173,8 +187,12 @@ if __name__ == '__main__':
     key_frame_nb = 12
     patch_per_frame = 64
     patch_rate = 0.4
-
+    #  截断正态分布初始化
     model = STSURNet(key_frame_nb=key_frame_nb, patch_per_frame=patch_per_frame)
+    for name, param in model.named_parameters():
+        if 'weight' in name:
+            truncated_normal_(param, mean=0, std=0.1)
+
     model.to(device)
     # total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     # print(f"Total number of parameters: {total_params}")
